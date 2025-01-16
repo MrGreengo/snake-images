@@ -1,0 +1,1643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Mr. Green's Snake Game (Word Puzzles) - Beta Test</title>
+  <style>
+    /***********************************************************
+     * 1) LAYOUT: GAME ON LEFT, TITLE & PUZZLE WORDS ON RIGHT
+     ***********************************************************/
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background-color: #333;
+      color: #fff;
+      font-family: Arial, sans-serif;
+    }
+
+    /* Use a flex container that stretches full height */
+    body {
+      display: flex;
+      flex-direction: row;    /* Left-to-right flow */
+      align-items: center;    /* Vertically center items (the game & the right side) */
+      justify-content: flex-start; /* Keep them to the left initially */
+    }
+
+    /***********************************************************
+     * 2) GAME CONTAINER (LEFT)
+     ***********************************************************/
+    #gameContainer {
+      width: 585px;     /* match canvas size */
+      height: 585px;    /* match canvas size */
+      margin-left: 40px; 
+      margin-right: 40px; /* some extra space to the right */
+      display: flex;
+      align-items: center;  /* center the canvas vertically in #gameContainer */
+      justify-content: center; 
+    }
+
+    #gameCanvas {
+      background-color: #000;
+      border: 1px solid #fff;
+      display: block;
+    }
+
+    /***********************************************************
+     * 3) RIGHT SIDE (TITLE, PUZZLE WORD, PUZZLE IMAGE, SCORES)
+     ***********************************************************/
+    #rightSide {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      /* "flex-start" keeps the title near the top */
+      justify-content: flex-start;
+      align-items: center;
+      height: 100%;
+    }
+
+    /* Title remains at top (unchanged) */
+    #gameTitle {
+      margin-top: 20px;
+      font-size: 1.5rem;
+    }
+
+    /* Puzzle word no longer uses margin-top: auto */
+    #puzzleWord {
+      /* Removed margin-top: auto */
+      margin-top: 20px; /* Or however much you need to position it where it used to be */
+      font-size: 8rem;
+      text-align: center;
+    }
+
+    /* Puzzle image remains below puzzle word */
+    #puzzleImage {
+      margin-top: 20px;
+      max-width: 200px;
+    }
+
+    /* Current score is moved up below the image */
+    #scoreBoard {
+      margin-top: 20px;
+      margin-bottom: 10px;
+      font-size: 2rem;
+    }
+
+    /* High score pinned to bottom */
+    #highScoreBoard {
+      margin-top: auto;       /* push this down to the bottom of the column */
+      margin-bottom: 40px;    /* spacing at bottom if needed */
+      font-size: 2rem;
+    }
+
+    /***********************************************************
+     * RESULTS OVERLAY
+     ***********************************************************/
+    #resultsOverlay {
+      display: none;             /* hidden by default */
+      position: fixed;           /* so it sits on top of everything */
+      top: 0; left: 0;           /* full screen */
+      width: 100%; 
+      height: 100%;
+      background: rgba(0, 0, 0, 0.7); /* semi-transparent black */
+      z-index: 9999;             /* on top of other elements */
+      align-items: center;       /* centers the content horizontally */
+      justify-content: center;   /* centers the content vertically */
+      flex-direction: column;    /* stack content and button vertically if desired */
+      color: #fff;               /* text color */
+      font-family: Arial, sans-serif;
+    }
+
+    #resultsOverlayContent {
+      background: #444;
+      padding: 20px;
+      margin: 20px;
+      border: 1px solid #fff;
+      border-radius: 6px;
+      max-width: 600px;
+    }
+
+    #closeOverlayBtn {
+      background: #888;
+      border: 1px solid #fff;
+      color: #fff;
+      padding: 10px 20px;
+      margin: 10px;
+      font-size: 1rem;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+
+    #closeOverlayBtn:hover {
+      background: #aaa;
+    }
+  </style>
+</head>
+
+<body>
+  <!-- LEFT: The game container -->
+  <div id="gameContainer">
+    <canvas id="gameCanvas" width="585" height="585"></canvas>
+  </div>
+
+  <!-- RIGHT: Title, Puzzle Word, Puzzle Image, Score -->
+  <div id="rightSide">
+    <h1 id="gameTitle">Mr. Green's Snake Game</h1>
+
+    <!-- The puzzle pattern (missing vowel) -->
+    <div id="puzzleWord">---</div>
+
+    <!-- Clipart image for the puzzle -->
+    <img id="puzzleImage" src="" alt="Puzzle Image" />
+
+    <!-- Scoreboard -->
+    <div id="scoreBoard">
+      Score: <span id="scoreValue">0</span>
+    </div>
+
+    <!-- High Score below that -->
+    <div id="highScoreBoard">
+      High Score: <span id="highScoreValue">0</span>
+    </div>
+  </div>
+
+  <!-- Results overlay, hidden by default -->
+  <div id="resultsOverlay">
+    <div id="resultsOverlayContent">
+      <!-- We'll fill this with HTML in resetGame() -->
+    </div>
+    <button id="closeOverlayBtn">Close</button>
+  </div>
+
+  <script>
+
+
+/*************************************************************
+ *                 GAME & PUZZLE VARIABLES
+ *************************************************************/
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const puzzleHistory = [];
+
+
+// Each cell is 45px => 20 columns & rows in a 600x600 canvas
+const gridSize = 45;
+const cols = canvas.width / gridSize;  
+const rows = canvas.height / gridSize;  
+
+// Snake starts in the middle
+const mid = Math.floor(cols / 2);
+let snake = [
+  { x: mid, y: mid },      // head
+  { x: mid - 1, y: mid },
+  { x: mid - 2, y: mid }
+];
+let oldSnake = snake.map(s => ({ ...s }));
+
+// Direction & game flow
+let direction = null;     // no movement until arrow is pressed
+let prevDirection = 'RIGHT';
+let gameStarted = false;  // must press arrow to start movement
+
+// For smooth movement
+let lastTimestamp = 0;
+let accumulator = 0;
+let moveInterval = 150;   // default (will override with speed prompt)
+
+// For open-mouth animation (if about to eat)
+let aboutToEat = false;
+
+// Score
+let score = 0;
+let highScore = 0;  // track the best score this session
+
+const scoreValueEl = document.getElementById('scoreValue');
+const highScoreValueEl = document.getElementById('highScoreValue');
+
+// Puzzle data
+let lettersOnBoard = [];
+const puzzleWordEl  = document.getElementById('puzzleWord');
+const puzzleImageEl = document.getElementById('puzzleImage');
+
+// Large puzzleLibrary presumably defined below...
+let currentPuzzle = null;
+
+
+/*************************************************************
+ *                SPEED PROMPT FUNCTION
+ *************************************************************/
+function promptSpeedSelection() {
+  const choice = prompt(
+    "Choose snake speed:\n" +
+    "  (e) Easy (slower)\n" +
+    "  (m) Medium\n" +
+    "  (h) Hard (faster)\n\n" +
+    "Enter e, m, or h:"
+  );
+  if (!choice) {
+    // default to medium if user cancels
+    moveInterval = 150;
+    return;
+  }
+  switch (choice.toLowerCase()) {
+    case 'e':
+      moveInterval = 200; // slower
+      break;
+    case 'h':
+      moveInterval = 100; // faster
+      break;
+    case 'm':
+    default:
+      moveInterval = 150; // medium
+      break;
+  }
+  alert(`Speed set to ${moveInterval} ms per move.`);
+}
+ ////////////////////////////////////////////////////////
+//   PUZZLE LIBRARY (50 items) with existing links    //
+////////////////////////////////////////////////////////
+
+// Beta test puzzle library
+const puzzleLibrary = [
+  // 0
+  {
+    pattern: "c_t",  
+    correct: "a",
+    distractors: ["k", "i"],
+    imgSrc: "https://static.vecteezy.com/system/resources/previews/024/144/447/non_2x/cat-clipart-minimalist-and-flat-logo-illustration-vector.jpg"
+  },
+  // 1
+  {
+    pattern: "d_sk",
+    correct: "e",
+    distractors: ["j", "a"],
+    imgSrc: "https://freedesignfile.com/image/preview/18699/table-black-and-white-clipart.png"
+  },
+  // 2
+  {
+    pattern: "p_t",
+    correct: "u",
+    distractors: ["r", "y"],
+    imgSrc: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSbWC33D0pQqaxiVXw1WexQDr7QNCyzoN9N3Q&s"
+  },
+  // 3
+  {
+    pattern: "b_t",
+    correct: "a",
+    distractors: ["n", "h"],
+    imgSrc: "https://img.freepik.com/premium-vector/free-vector-bat-clipart-background_889056-109791.jpg"
+  },
+  // 4
+  {
+    pattern: "f_sh",
+    correct: "i",
+    distractors: ["o", "u"],
+    imgSrc: "https://images.freeimages.com/vhq/images/previews/b03/fish-hatchery-black-clip-art-105293.png"
+  },
+
+  // 5
+  {
+    pattern: "m_n",
+    correct: "a",
+    distractors: ["I", "u"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/man.webp"
+  },
+  // 6
+  {
+    pattern: "l_p",
+    correct: "i",
+    distractors: ["e", "u"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/lip.webp" 
+  },
+  // 7
+  {
+    pattern: "t_st",
+    correct: "e",
+    distractors: ["o", "i"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/test.webp" 
+  },
+  // 8
+  {
+    pattern: "s_n",
+    correct: "u",
+    distractors: ["a", "e"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/sun.webp"
+  },
+  // 9
+  {
+    pattern: "h_t",
+    correct: "o",
+    distractors: ["e", "c"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/hot1.webp"
+  },
+
+  // 10
+  {
+    pattern: "p_n",
+    correct: "e",
+    distractors: ["a", "o"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/pen.webp"
+  },
+  // 11
+  {
+    pattern: "t_b",
+    correct: "u",
+    distractors: ["i", "d"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/tub.webp"
+  },
+  // 12
+  {
+    pattern: "s_ck",
+    correct: "i",
+    distractors: ["e", "g"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/sick1.webp"
+  },
+  // 13
+  {
+    pattern: "d_g",
+    correct: "o",
+    distractors: ["e", "r"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/dog.webp"
+  },
+  // 14
+  {
+    pattern: "f_ll",
+    correct: "a",
+    distractors: ["o", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/fall%20(season).webp"
+  },
+  // 15
+  {
+    pattern: "r_b",
+    correct: "o",
+    distractors: ["a", "m"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/rob.webp"
+  },
+  // 16
+  {
+    pattern: "sh_p",
+    correct: "o",
+    distractors: ["a", "w"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/shop.webp"
+  },
+  // 17
+  {
+    pattern: "p_ll",
+    correct: "u",
+    distractors: ["o", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/pull.webp"
+  },
+  // 18
+  {
+    pattern: "cr_b",
+    correct: "a",
+    distractors: ["u", "q"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/crab.webp"
+  },
+
+  // 19
+  {
+    pattern: "s_t",
+    correct: "a",
+    distractors: ["o", "n"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/sat.webp"
+  },
+  // 20
+  {
+    pattern: "b_d",
+    correct: "e",
+    distractors: ["k", "p"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/bed.webp"
+  },
+  // 21
+  {
+    pattern: "c_p",
+    correct: "u",
+    distractors: ["i", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/cup.webp"
+  },
+  // 22
+  {
+    pattern: "h_ll",
+    correct: "i",
+    distractors: ["o", "r"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/hill.webp"
+  },
+  // 23
+  {
+    pattern: "sp_n",
+    correct: "i",
+    distractors: ["e", "b"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/spin.webp"
+  },
+  // 24
+  {
+    pattern: "dr_p",
+    correct: "o",
+    distractors: ["s", "e"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/drop.webp"
+  },
+  // 25
+  {
+    pattern: "c_rt",
+    correct: "a",
+    distractors: ["i", "p"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/cart.webp"
+  },
+  // 26
+  {
+    pattern: "tr_p",
+    correct: "a",
+    distractors: ["o", "z"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/trap.webp"
+  },
+  // 27
+  {
+    pattern: "f_rm",
+    correct: "a",
+    distractors: ["e", "y"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/farm.webp"
+  },
+  // 28
+  {
+    pattern: "sl_p",
+    correct: "ee",
+    distractors: ["ei", "ae"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/sleep.webp"
+  },
+
+  // 29
+  {
+    pattern: "d_ck",
+    correct: "u",
+    distractors: ["a", "r"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/duck%20(verb1).webp"
+  },
+  // 30
+  {
+    pattern: "g_m",
+    correct: "u",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/gum%20(1).webp"
+  },
+  // 31
+  {
+    pattern: "st_p",
+    correct: "o",
+    distractors: ["e", "r"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/stop.webp"
+  },
+  // 32
+  {
+    pattern: "c_tch",
+    correct: "a",
+    distractors: ["o", "p"],
+    imgSrc: "https://github.com/MrGreengo/snake-images/blob/main/catch.png?raw=true"
+  },
+  // 33
+  {
+    pattern: "m_ss",
+    correct: "i",
+    distractors: ["d", "b"],
+    imgSrc: "https://github.com/MrGreengo/snake-images/blob/main/miss%20(a%20shot).jpg"
+  },
+  // 34
+  {
+    pattern: "f_rm",
+    correct: "i",
+    distractors: ["e", "g"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/firm.webp"
+  },
+  // 35
+  {
+    pattern: "gr_b",
+    correct: "a",
+    distractors: ["f", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/grab.webp"
+  },
+
+  // 37
+  {
+    pattern: "m_ll",
+    correct: "a",
+    distractors: ["e", "b"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/mall.webp"
+  },
+  // 38
+  {
+    pattern: "w_nd",
+    correct: "i",
+    distractors: ["o", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/wind.webp"
+  },
+
+  // 39
+  {
+    pattern: "pl_t",
+    correct: "o",
+    distractors: ["i", "d"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/story_arc_2.webp"
+  },
+  // 40
+  {
+    pattern: "th_ck",
+    correct: "i",
+    distractors: ["e", "r"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/thick.webp"
+  },
+  // 41
+  {
+    pattern: "w_sh",
+    correct: "i",
+    distractors: ["o", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/wish.webp"
+  },
+  // 42
+  {
+    pattern: "c_me",
+    correct: "o",
+    distractors: ["i", "r"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/come.webp"
+  },
+  // 43
+  {
+    pattern: "g_p",
+    correct: "a",
+    distractors: ["e", "n"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/gap.webp"
+  },
+  // 44
+  {
+    pattern: "gr_nt",
+    correct: "u",
+    distractors: ["i", "p"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/grunt.webp"
+  },
+  // 45
+  {
+    pattern: "t_rn",
+    correct: "u",
+    distractors: ["a", "o"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/turn.webp"
+  },
+  // 46
+  {
+    pattern: "j_m",
+    correct: "a",
+    distractors: ["o", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/jam.webp"
+  },
+  // 47
+  {
+    pattern: "wh_l",
+    correct: "ee",
+    distractors: ["aa", "oo"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/wheel.webp"
+  },
+  // 48
+  {
+    pattern: "s_re",
+    correct: "u",
+    distractors: ["a", "p"],
+    imgSrc: "https://github.com/MrGreengo/snake-images/blob/main/sure.jpg?raw=true"
+  },
+
+  // 49
+  {
+    pattern: "d_r",
+    correct: "oo",
+    distractors: ["ii", "ee"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/door.webp"
+  },
+ // 50
+  {
+    pattern: "f_ll",
+    correct: "a",
+    distractors: ["o", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/fall-verb.webp"
+  },
+   // 51 "animal"  => remove first vowel "a"
+  {
+    pattern: " _nimal",  // The 'a' at index 0 replaced with underscore
+    correct: "a",
+    distractors: ["e", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/animal.webp"
+  },
+  // 52 "class" => remove first vowel "a"
+  {
+    pattern: "cl_ss",
+    correct: "a",
+    distractors: ["o", "m"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/class.webp"
+  },
+  // 2) "family" => remove first vowel "a"
+  {
+    pattern: "f_mily",
+    correct: "a",
+    distractors: ["o", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/family.webp"
+  },
+  // 3) "hand" => remove "a"
+  {
+    pattern: "h_nd",
+    correct: "a",
+    distractors: ["o", "p"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/hand.webp"
+  },
+  // 4) "land" => remove "a"
+  {
+    pattern: "l_nd",
+    correct: "a",
+    distractors: ["o", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/land.webp"
+  },
+
+  // 5) "man" => remove "a"
+  {
+    pattern: "m_n",
+    correct: "a",
+    distractors: ["e", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/man.webp"
+  },
+  // 6) "plant" => remove "a"
+  {
+    pattern: "pl_nt",
+    correct: "a",
+    distractors: ["o", "s"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/plant.webp"
+  },
+  // 7) "friends" => remove "i"
+  {
+    pattern: "fr__nds",
+    correct: "ie",
+    distractors: ["ei", "ae"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/friends.webp"
+  },
+  // 8) "head" => remove "e"
+  {
+    pattern: "h_d",
+    correct: "ea",
+    distractors: ["ae", "td"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/head.webp"
+  },
+  // 9) "letter" => remove first vowel "e"
+  {
+    pattern: "l_tter",
+    correct: "e",
+    distractors: ["a", "m"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/letter.webp"
+  },
+
+  // 10) "men" => remove "e"
+  {
+    pattern: "m_n",
+    correct: "e",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/men.webp"
+  },
+  // 11) "children" => remove first vowel "i"
+  {
+    pattern: "ch_ldren",
+    correct: "i",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/children.webp"
+  },
+  // 12) "city" => remove "i"
+  {
+    pattern: "c_ty",
+    correct: "i",
+    distractors: ["a", "n"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/city.webp"
+  },
+
+
+  // 15) "king" => remove "i"
+  {
+    pattern: "k_ng",
+    correct: "i",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/king.webp"
+  },
+  // 16) "list" => remove "i"
+  {
+    pattern: "l_st",
+    correct: "i",
+    distractors: ["a", "p"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/list.webp"
+  },
+  // 17) "picture" => remove first vowel "i"
+  {
+    pattern: "p_cture",
+    correct: "i",
+    distractors: ["a", "m"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/picture.webp"
+  },
+  // 18) "river" => remove "i"
+  {
+    pattern: "r_ver",
+    correct: "i",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/river.webp"
+  },
+  // 19) "thing" => remove "i"
+  {
+    pattern: "th_ng",
+    correct: "i",
+    distractors: ["a", "m"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/thing.webp"
+  },
+
+ // 33
+  {
+    pattern: "m_ss",
+    correct: "i",
+    distractors: ["d", "b"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/miss.webp"
+  },
+  // 21) "scientist" => remove first vowel "i" (the “s-c-i-e-n-t-i-s-t” => the first vowel is i at index 2)
+  {
+    pattern: "sc_entist",
+    correct: "i",
+    distractors: ["a", "m"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/scientist.webp"
+  },
+  // 22) "body" => remove "o"
+  {
+    pattern: "b_dy",
+    correct: "o",
+    distractors: ["i", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/body.webp"
+  },
+  // 23) "box" => remove "o"
+  {
+    pattern: "b_x",
+    correct: "o",
+    distractors: ["i", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/box.webp"
+  },
+  // 24) "rock" => remove "o"
+  {
+    pattern: "r_ck",
+    correct: "o",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/rock.webp"
+  },
+
+  // 25) "song" => remove "o"
+  {
+    pattern: "s_ng",
+    correct: "o",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/song.webp"
+  },
+  // 26) "top" => remove "o"
+  {
+    pattern: "t_p",
+    correct: "o",
+    distractors: ["a", "m"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/top.webp"
+  },
+  // 27) "country" => remove first vowel "o"
+  {
+    pattern: "c__ntry",
+    correct: "ou",
+    distractors: ["au", "mn"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/country.webp"
+  },
+ // 27) "country" => remove first vowel "o"
+  {
+    pattern: "c__ntry",
+    correct: "ou",
+    distractors: ["au", "mn"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/country(side).webp"
+  },
+  // 28) "mom" => remove first vowel "o"
+  {
+    pattern: "m_m",
+    correct: "o",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/mom.webp"
+  },
+  // 29) "number" => remove "u"
+  {
+    pattern: "n_mber",
+    correct: "u",
+    distractors: ["a", "r"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/number.webp"
+  },
+
+  // 30) "product" => remove first vowel "o"
+  {
+    pattern: "pr_duct",
+    correct: "o",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/product.webp"
+  },
+  // 31) "ask" => remove "a"
+  {
+    pattern: "_sk",
+    correct: "a",
+    distractors: ["o", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/ask.webp"
+  },
+  // 32) "carry" => remove first vowel "a"
+  {
+    pattern: "c_rry",
+    correct: "a",
+    distractors: ["i", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/carry.webp"
+  },
+  // 33) "stand" => remove "a"
+  {
+    pattern: "st_nd",
+    correct: "a",
+    distractors: ["i", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/stand.webp"
+  },
+  // 34) "check" => remove "e"
+  {
+    pattern: "ch_ck",
+    correct: "e",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/check.webp"
+  },
+
+  // 35) "get" => remove "e"
+  {
+    pattern: "g_t",
+    correct: "e",
+    distractors: ["a", "b"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/get.webp"
+  },
+  // 36) "help" => remove "e"
+  {
+    pattern: "h_lp",
+    correct: "e",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/help.webp"
+  },
+  // 37) "tell" => remove "e"
+  {
+    pattern: "t_ll",
+    correct: "e",
+    distractors: ["u", "p"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/tell.webp"
+  },
+  // 38) "bring" => remove "i"
+  {
+    pattern: "br_ng",
+    correct: "i",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/bring.webp"
+  },
+  // 39) "give" => remove "i"
+  {
+    pattern: "g_ve",
+    correct: "i",
+    distractors: ["e", "l"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/give.webp"
+  },
+
+  // 40) "sing" => remove "i"
+  {
+    pattern: "s_ng",
+    correct: "i",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/sing.webp"
+  },
+  // 41) "think" => remove "i"
+  {
+    pattern: "th_nk",
+    correct: "i",
+    distractors: ["a", "r"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/think.webp"
+  },
+
+  // 43) "cut" => remove "u"
+  {
+    pattern: "c_t",
+    correct: "u",
+    distractors: ["o", "n"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/cut.webp"
+  },
+  // 44) "can" => remove "a"
+  {
+    pattern: "c_n",
+    correct: "a",
+    distractors: ["o", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/can.webp"
+  },
+
+  // 45) "add" => remove "a"
+  {
+    pattern: "_dd",
+    correct: "a",
+    distractors: ["o", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/add.webp"
+  },
+  // 46) "back" => remove "a"
+  {
+    pattern: "b_ck",
+    correct: "a",
+    distractors: ["o", "t"],
+    imgSrc: "https://github.com/MrGreengo/snake-images/blob/main/back(direction).jpg"
+  },
+ // 46) "back" => remove "a"
+  {
+    pattern: "b_ck",
+    correct: "a",
+    distractors: ["o", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/back.webp"
+  },
+  // 47) "black" => remove "a"
+  {
+    pattern: "bl_ck",
+    correct: "a",
+    distractors: ["e", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/black.webp"
+  },
+  // 48) "plan" => remove "a"
+  {
+    pattern: "pl_n",
+    correct: "a",
+    distractors: ["o", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/plan.webp"
+  },
+  // 49) "end" => remove "e"
+  {
+    pattern: "_nd",
+    correct: "e",
+    distractors: ["o", "c"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/end%20(1).webp"
+  },
+
+  // 50) "rest" => remove "e"
+  {
+    pattern: "r_st",
+    correct: "e",
+    distractors: ["a", "p"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/rest.webp"
+  },
+  // 51) "step" => remove "e"
+  {
+    pattern: "st_p",
+    correct: "e",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/step.webp"
+  },
+  // 52) "red" => remove "e"
+  {
+    pattern: "r_d",
+    correct: "e",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/red.webp"
+  },
+  // 53) "well" => remove "e"
+  {
+    pattern: "w_ll",
+    correct: "e",
+    distractors: ["a", "p"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/well(noun).webp"
+  },
+  // 53) "well" => remove "e"
+  {
+    pattern: "w_ll",
+    correct: "e",
+    distractors: ["a", "p"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/well(adjective).webp"
+  },
+  // 54) "talk" => remove "a"
+  {
+    pattern: "t_lk",
+    correct: "a",
+    distractors: ["o", "m"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/talk.webp"
+  },
+
+  // 55) "left" => remove "e"
+  {
+    pattern: "l_ft",
+    correct: "e",
+    distractors: ["a", "p"],
+    imgSrc: "https://github.com/MrGreengo/snake-images/blob/main/left%20(1).jpg?raw=true"
+  },
+  // 56) "live" => remove "i"
+  {
+    pattern: "l_ve",
+    correct: "i",
+    distractors: ["a", "o"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/live.webp"
+  },
+  // 57) "begin" => remove "e"
+  {
+    pattern: "b_gin",
+    correct: "e",
+    distractors: ["a", "t"],
+    imgSrc: "https://github.com/MrGreengo/snake-images/blob/main/begin.jpg?raw=true"
+  },
+  // 58) "miss" => remove "i"
+  {
+    pattern: "m_ss",
+    correct: "i",
+    distractors: ["a", "b"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/miss%20(a%20shot).webp"
+  },
+  // 59) "got" => remove "o"
+  {
+    pattern: "g_t",
+    correct: "o",
+    distractors: ["a", "p"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/got.webp"
+  },
+
+  // 60) "must" => remove "u"
+  {
+    pattern: "m_st",
+    correct: "u",
+    distractors: ["o", "t"],
+    imgSrc: "https://github.com/MrGreengo/snake-images/blob/main/must.jpg?raw=true"
+  },
+  // 61) "study" => remove first vowel "u"
+  {
+    pattern: "st_dy",
+    correct: "u",
+    distractors: ["o", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/study.webp"
+  },
+  // 62) "money" => remove first vowel "o"
+  {
+    pattern: "m_ney",
+    correct: "o",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/money.webp"
+  },
+  // 63) "front" => remove "o"
+  {
+    pattern: "fr_nt",
+    correct: "o",
+    distractors: ["a", "i"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/front.webp"
+  },
+
+
+  // 66) "building" => remove first vowel "u"
+  {
+    pattern: "b_lding",
+    correct: "ui",
+    distractors: ["iu", "ol"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/building.webp"
+  },
+  // 67) "passed" => remove "a"
+  {
+    pattern: "p_ssed",
+    correct: "a",
+    distractors: ["o", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/passed.webp"
+  },
+  // 68) "happen" => remove "a"
+  {
+    pattern: "h_ppen",
+    correct: "a",
+    distractors: ["o", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/happen.webp"
+  },
+  // 69) "cover" => remove "o"
+  {
+    pattern: "c_ver",
+    correct: "o",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/cover.webp"
+  },
+
+  // 70) "pulled" => remove "u"
+  {
+    pattern: "p_ll",
+    correct: "u",
+    distractors: ["o", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/pull.webp"
+  },
+  // 71) "fact" => remove "a"
+  {
+    pattern: "f_ct",
+    correct: "a",
+    distractors: ["o", "m"],
+    imgSrc: "https://github.com/MrGreengo/snake-images/blob/main/fact.jpg?raw=true"
+  },
+  // 72) "inch" => remove "i"
+  {
+    pattern: "_nch",
+    correct: "i",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/inch.webp"
+  },
+  // 73) "six" => remove "i"
+  {
+    pattern: "s_x",
+    correct: "i",
+    distractors: ["a", "o"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/six.webp"
+  },
+  // 74) "problem" => remove "o"
+  {
+    pattern: "pr_blem",
+    correct: "o",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/problem.webp"
+  },
+
+  // 75) "object" => remove first vowel "o"
+  {
+    pattern: "_bject",
+    correct: "o",
+    distractors: ["a", "t"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/object.webp"
+  },
+  // 76) "tenth" => remove "e"
+  {
+    pattern: "t_nth",
+    correct: "e",
+    distractors: ["a", "p"],
+    imgSrc: "https://raw.githubusercontent.com/MrGreengo/snake-images/refs/heads/main/tenth.webp"
+  }
+];
+
+
+
+  /*************************************************************
+ *                         INIT
+ *************************************************************/
+// 1) Prompt user for speed
+promptSpeedSelection();
+
+// 2) Reset timing so there's no big jump after prompt
+lastTimestamp = performance.now();
+accumulator = 0;
+
+// 3) Initialize puzzle
+pickNewPuzzle();
+
+// 4) Draw puzzle & snake once, so user sees it immediately
+draw(1.0);
+
+// 5) Listen for arrow keys & start the main loop
+document.addEventListener('keydown', onKeyDown);
+requestAnimationFrame(mainLoop);
+
+    /*************************************************************
+     *                   PUZZLE / LETTER LOGIC
+     *************************************************************/
+    function pickNewPuzzle() {
+      // Pick a random puzzle from the 5
+      const idx = Math.floor(Math.random() * puzzleLibrary.length);
+      currentPuzzle = puzzleLibrary[idx];
+
+      // Display the puzzle pattern
+      puzzleWordEl.textContent = currentPuzzle.pattern;
+
+      // Display the puzzle image
+      puzzleImageEl.src = currentPuzzle.imgSrc;
+
+      // Place letters (correct + 2 distractors) on the board
+      lettersOnBoard = [];
+      const chars = [
+        { char: currentPuzzle.correct, isCorrect: true },
+        { char: currentPuzzle.distractors[0], isCorrect: false },
+        { char: currentPuzzle.distractors[1], isCorrect: false }
+      ];
+      shuffleArray(chars);
+
+      chars.forEach(letterObj => {
+        let placed = false;
+        while (!placed) {
+          const rx = Math.floor(Math.random() * cols);
+          const ry = Math.floor(Math.random() * rows);
+
+          const snakeOccupies = snake.some(seg => seg.x === rx && seg.y === ry);
+          const letterOccupies = lettersOnBoard.some(l => l.x === rx && l.y === ry);
+
+          if (!snakeOccupies && !letterOccupies) {
+            lettersOnBoard.push({
+              x: rx,
+              y: ry,
+              char: letterObj.char,
+              isCorrect: letterObj.isCorrect
+            });
+            placed = true;
+          }
+        }
+      });
+    }
+
+  function handleLetterGobble(letter) {
+  // 1) Build the full word from currentPuzzle
+  const fullWord = currentPuzzle.pattern.replace("_", currentPuzzle.correct);
+
+  if (letter.isCorrect) {
+    // 2) Mark puzzle as correct in puzzleHistory
+    puzzleHistory.push({
+      pattern: currentPuzzle.pattern,
+      correctAnswer: fullWord,
+      wasCorrect: true
+    });
+
+    // 3) Increase score, pick new puzzle
+    score++;
+    pickNewPuzzle();
+  } else {
+    // 4) Mark puzzle as wrong in puzzleHistory
+    puzzleHistory.push({
+      pattern: currentPuzzle.pattern,
+      correctAnswer: fullWord,
+      wasCorrect: false
+    });
+
+    // 5) Wrong => game over
+    resetGame();
+    return;
+  }
+
+  // 6) Update score display
+  scoreValueEl.textContent = String(score);
+}
+
+
+// We'll assume you already declared puzzleHistory, handleLetterGobble, etc.
+
+function resetGame() {
+  // Compare final score to highScore, etc. if you have that logic
+  // Build a results summary in HTML
+  let html = `<h2>Session Results</h2>`;
+  html += "<ul>";
+  for (const entry of puzzleHistory) {
+    if (entry.wasCorrect) {
+      html += `<li>Correct: ${entry.pattern} => ${entry.correctAnswer}</li>`;
+    } else {
+      html += `<li style="color: red">Wrong: ${entry.pattern} => ${entry.correctAnswer}</li>`;
+    }
+  }
+  html += "</ul>";
+
+  // Put the HTML inside #resultsOverlayContent
+  const overlayContent = document.getElementById('resultsOverlayContent');
+  overlayContent.innerHTML = html;
+
+  // Show the overlay by setting display to "flex"
+  const overlay = document.getElementById('resultsOverlay');
+  overlay.style.display = "flex";
+
+   // Build full correct word by replacing underscore once
+      // e.g. "c_t" with "a" => "cat"
+      // If your puzzle patterns have exactly one "_", this works.
+      const correctWord = currentPuzzle.pattern.replace("_", currentPuzzle.correct);
+
+  // Then your normal game reset logic...
+  alert(`Game Over! Your score was: ${score}\n\nThe correct word is: ${correctWord}`);
+  score = 0;
+  scoreValueEl.textContent = "0";
+  direction = null;
+  prevDirection = 'RIGHT';
+  aboutToEat = false;
+  gameStarted = false;
+
+  snake = [
+    { x: mid,     y: mid },
+    { x: mid - 1, y: mid },
+    { x: mid - 2, y: mid }
+  ];
+  oldSnake = snake.map(s => ({ ...s }));
+  pickNewPuzzle();
+  accumulator = 0;
+  lastTimestamp = 0;
+}
+
+// Also handle the "Close" button
+const closeBtn = document.getElementById('closeOverlayBtn');
+closeBtn.addEventListener('click', () => {
+  document.getElementById('resultsOverlay').style.display = "none";
+});
+
+
+function handleLetterGobble(letter) {
+  // 1) Build the full word from currentPuzzle
+  const fullWord = currentPuzzle.pattern.replace("_", currentPuzzle.correct);
+
+  // 2) If correct...
+  if (letter.isCorrect) {
+    puzzleHistory.push({
+      pattern: currentPuzzle.pattern,
+      correctAnswer: fullWord,
+      wasCorrect: true
+    });
+
+    score++;
+    pickNewPuzzle(); // load next puzzle
+
+  // 3) If wrong...
+  } else {
+    puzzleHistory.push({
+      pattern: currentPuzzle.pattern,
+      correctAnswer: fullWord,
+      wasCorrect: false
+    });
+
+    // end the game
+    resetGame();
+    return;
+  }
+
+  // 4) Update score display
+  scoreValueEl.textContent = String(score);
+}
+
+
+    // Shuffle array in-place
+    function shuffleArray(arr) {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+    }
+
+  function mainLoop(timestamp) {
+  // Check if the results overlay is visible; if so, freeze the game
+  const overlay = document.getElementById('resultsOverlay');
+  if (overlay.style.display === "flex") {
+    requestAnimationFrame(mainLoop);
+    return; // Do nothing while the overlay is visible
+  }
+
+  const deltaTime = timestamp - lastTimestamp;
+  lastTimestamp = timestamp;
+  accumulator += deltaTime;
+
+  if (gameStarted) {
+    while (accumulator >= moveInterval) {
+      updateLogic();
+      accumulator -= moveInterval;
+    }
+  } else {
+    oldSnake = snake.map(s => ({ ...s }));
+  }
+
+  const interpolation = accumulator / moveInterval;
+  draw(interpolation);
+
+  requestAnimationFrame(mainLoop);
+}
+
+    /*************************************************************
+     *                  UPDATE GAME LOGIC
+     *************************************************************/
+    function updateLogic() {
+      oldSnake = snake.map(s => ({ ...s }));
+      if (!direction) return;
+
+      let nextX = snake[0].x;
+      let nextY = snake[0].y;
+
+      switch (direction) {
+        case 'LEFT':  nextX--;  break;
+        case 'UP':    nextY--;  break;
+        case 'RIGHT': nextX++;  break;
+        case 'DOWN':  nextY++;  break;
+      }
+
+      // Check letters
+      const letterAtPosition = lettersOnBoard.find(l => l.x === nextX && l.y === nextY);
+      aboutToEat = (letterAtPosition !== undefined);
+
+      // Insert new head
+      snake.unshift({ x: nextX, y: nextY });
+
+      if (letterAtPosition) {
+        // Attempt to gobble
+        handleLetterGobble(letterAtPosition);
+        // If distractor => resetGame => stop logic
+        if (!letterAtPosition.isCorrect) return;
+      } else {
+        // Remove tail if no letter eaten
+        snake.pop();
+      }
+
+      // Check collisions (wall or self)
+      if (checkCollision(nextX, nextY)) {
+        resetGame();
+      }
+
+      prevDirection = direction;
+    }
+
+    /*************************************************************
+     *                           DRAW
+     *************************************************************/
+    function draw(interpolation) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Draw snake
+      for (let i = 0; i < snake.length; i++) {
+        const cur = snake[i];
+        const old = oldSnake[i] || cur;
+
+        const x = old.x + interpolation * (cur.x - old.x);
+        const y = old.y + interpolation * (cur.y - old.y);
+
+        if (i === 0) {
+          drawSnakeHead(x, y, aboutToEat);
+        } else {
+          ctx.fillStyle = 'limegreen';
+          ctx.fillRect(x * gridSize, y * gridSize, gridSize, gridSize);
+        }
+      }
+
+ // Draw letters
+lettersOnBoard.forEach(letter => {
+  // 1) Draw the red square (the tile)
+  ctx.fillStyle = 'red';
+  ctx.fillRect(letter.x * gridSize, letter.y * gridSize, gridSize, gridSize);
+
+  // 2) Set up text style
+  ctx.fillStyle = 'white';
+  ctx.font = '30px Helvetica';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // 3) Place the text in the center of the cell
+  const centerX = (letter.x + 0.5) * gridSize;
+  const centerY = (letter.y + 0.5) * gridSize;
+  ctx.fillText(letter.char, centerX, centerY);
+});
+
+    }
+
+    function drawSnakeHead(x, y, openMouth) {
+      ctx.fillStyle = 'limegreen';
+      ctx.fillRect(x * gridSize, y * gridSize, gridSize, gridSize);
+
+      // Eyes
+      ctx.fillStyle = 'black';
+      ctx.fillRect(x * gridSize + gridSize * 0.2, y * gridSize + gridSize * 0.2, 4, 4);
+      ctx.fillRect(x * gridSize + gridSize * 0.6, y * gridSize + gridSize * 0.2, 4, 4);
+
+      if (openMouth) {
+        ctx.fillStyle = 'black';
+        ctx.fillRect(
+          x * gridSize,
+          y * gridSize + gridSize * 0.5,
+          gridSize,
+          gridSize * 0.5
+        );
+        ctx.fillStyle = 'red';
+        ctx.fillRect(
+          x * gridSize + gridSize * 0.4,
+          y * gridSize + gridSize * 0.7,
+          gridSize * 0.2,
+          gridSize * 0.3
+        );
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(x * gridSize + gridSize * 0.3, y * gridSize + gridSize * 0.8);
+        ctx.lineTo(x * gridSize + gridSize * 0.7, y * gridSize + gridSize * 0.8);
+        ctx.strokeStyle = 'black';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    }
+
+    /*************************************************************
+     *                    COLLISION & RESET
+     *************************************************************/
+    function checkCollision(x, y) {
+      // Walls
+      if (x < 0 || x >= cols || y < 0 || y >= rows) return true;
+      // Snake body collision (skip head i=0)
+      for (let i = 1; i < snake.length; i++) {
+        if (snake[i].x === x && snake[i].y === y) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+ function resetGame() {
+  // If user’s final score beats the highScore, update it
+  if (score > highScore) {
+    highScore = score;
+    highScoreValueEl.textContent = highScore; // reflect new high score in UI
+  }
+
+  // Build full correct word by replacing the underscore
+  const correctWord = currentPuzzle.pattern.replace("_", currentPuzzle.correct);
+
+  // Construct the results HTML
+  const html = `
+    <h2>Game Over!</h2>
+    <p>Your score was: <strong>${score}</strong></p>
+    <p>The correct word is:</p>
+    <p style="font-size: 2rem; font-weight: bold;">${correctWord}</p>
+    <img src="${currentPuzzle.imgSrc}" alt="Puzzle Image" style="margin-top: 10px; max-width: 200px; border-radius: 8px;" />
+  `;
+
+  // Put the HTML inside #resultsOverlayContent
+  const overlayContent = document.getElementById('resultsOverlayContent');
+  overlayContent.innerHTML = html;
+
+  // Show the overlay
+  const overlay = document.getElementById('resultsOverlay');
+  overlay.style.display = "flex";
+
+  // Attach a listener to the close button to reset the game after closing the overlay
+  const closeBtn = document.getElementById('closeOverlayBtn');
+  closeBtn.addEventListener('click', () => {
+    overlay.style.display = "none";
+    performGameReset(); // Call the function that resets the game
+  }, { once: true }); // Ensure the event listener is only used once
+}
+
+function performGameReset() {
+  // Reset game state
+  score = 0;
+  scoreValueEl.textContent = "0";
+  direction = null;
+  prevDirection = 'RIGHT';
+  aboutToEat = false;
+  gameStarted = false;
+
+  snake = [
+    { x: mid,     y: mid },
+    { x: mid - 1, y: mid },
+    { x: mid - 2, y: mid }
+  ];
+  oldSnake = snake.map(s => ({ ...s }));
+  pickNewPuzzle();
+
+  accumulator = 0;
+  lastTimestamp = 0;
+}
+
+
+
+    /*************************************************************
+     *                  KEYBOARD CONTROLS
+     *************************************************************/
+    function onKeyDown(e) {
+      const key = e.key;
+
+      if (!gameStarted) {
+        let desiredDir = null;
+        if (key === 'ArrowLeft' || key === 'a') {
+          desiredDir = 'LEFT';
+        } else if (key === 'ArrowUp' || key === 'w') {
+          desiredDir = 'UP';
+        } else if (key === 'ArrowRight' || key === 'd') {
+          desiredDir = 'RIGHT';
+        } else if (key === 'ArrowDown' || key === 's') {
+          desiredDir = 'DOWN';
+        }
+        if (desiredDir) {
+          // Avoid immediate reverse
+          if (!isOpposite(desiredDir, prevDirection)) {
+            direction = desiredDir;
+            prevDirection = desiredDir;
+            gameStarted = true;
+            lastTimestamp = performance.now();
+            accumulator = 0;
+          }
+        }
+        return;
+      }
+
+      // Once started, normal direction logic
+      switch (key) {
+        case 'ArrowLeft':
+        case 'a':
+          if (prevDirection !== 'RIGHT') direction = 'LEFT';
+          break;
+        case 'ArrowUp':
+        case 'w':
+          if (prevDirection !== 'DOWN') direction = 'UP';
+          break;
+        case 'ArrowRight':
+        case 'd':
+          if (prevDirection !== 'LEFT') direction = 'RIGHT';
+          break;
+        case 'ArrowDown':
+        case 's':
+          if (prevDirection !== 'UP') direction = 'DOWN';
+          break;
+      }
+    }
+
+    function isOpposite(d1, d2) {
+      return (
+        (d1 === 'LEFT' && d2 === 'RIGHT') ||
+        (d1 === 'RIGHT' && d2 === 'LEFT') ||
+        (d1 === 'UP' && d2 === 'DOWN') ||
+        (d1 === 'DOWN' && d2 === 'UP')
+      );
+    }
+  </script>
+</body>
+
+
+</html>
